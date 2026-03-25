@@ -2,22 +2,42 @@ package pia
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/benburkert/dns"
 	"github.com/pkg/errors"
 )
+
+// piaCACertFingerprintSHA256 is the expected SHA-256 fingerprint (lowercase hex, no colons) of
+// the PIA RSA-4096 CA certificate's DER encoding. This guards against a TOFU/MITM attack on
+// the auto-download path by refusing to use a cert that doesn't match this value.
+//
+// To compute it from a trusted copy of the certificate:
+//
+//	curl -s https://raw.githubusercontent.com/pia-foss/desktop/master/daemon/res/ca/rsa_4096.crt \
+//	  | openssl x509 -noout -fingerprint -sha256 \
+//	  | sed 's/.*=//;s/://g' | tr 'A-F' 'a-f'
+//
+// Cross-verify the result against PIA's official open-source repository:
+// https://github.com/pia-foss/desktop/blob/master/daemon/res/ca/rsa_4096.crt
+//
+// Leave this empty to disable the auto-download path entirely and require --ca-cert.
+// This 1fd2... value was correct as of 25 March 2026
+const piaCACertFingerprintSHA256 = "1fd25658456eab3041fba77ccd398ab8124edcc1b8b2fc1d55fdf6b1bbfc9d70"
 
 type PIAWgClient interface {
 	GetToken() (string, error)
@@ -35,6 +55,9 @@ type PIAClient struct {
 	password         string
 	verbose          bool
 	caCert           []byte
+	// caCertPath is the path to a local CA cert file. When non-empty it is used
+	// in preference to the auto-download path, bypassing any network fetch.
+	caCertPath string
 }
 
 type piaServerList struct {
@@ -69,13 +92,16 @@ type Server struct {
 	IP string
 }
 
-// NewPIAClient creates a new PIA client for with the list of servers populated
-func NewPIAClient(username, password, region string, verbose bool) (*PIAClient, error) {
+// NewPIAClient creates a new PIA client for with the list of servers populated.
+// caCertPath may be empty, in which case the CA cert is downloaded from PIA's GitHub
+// repository and verified against the piaCACertFingerprintSHA256 constant.
+func NewPIAClient(username, password, region, caCertPath string, verbose bool) (*PIAClient, error) {
 	piaClient := PIAClient{
-		username: username,
-		password: password,
-		region:   region,
-		verbose:  verbose,
+		username:   username,
+		password:   password,
+		region:     region,
+		verbose:    verbose,
+		caCertPath: caCertPath,
 	}
 
 	// Get list of servers
@@ -122,7 +148,7 @@ func (p *PIAClient) GetToken() (string, error) {
 	}
 
 	if p.verbose {
-		log.Print("Got token: ", tokenResp.Token)
+		log.Printf("Got token: %d bytes", len(tokenResp.Token))
 	}
 
 	return tokenResp.Token, nil
@@ -322,24 +348,73 @@ func (p *PIAClient) executePIARequest(server Server, url, token string) (*http.R
 	return resp, nil
 }
 
-// downloadPIACertificate downloads the PIA certificate
+// downloadPIACertificate loads the PIA CA certificate.
+//
+// If PIAClient.caCertPath is set, the cert is read from that file — the caller is
+// responsible for obtaining and trusting the file.
+//
+// Otherwise the cert is fetched from PIA's GitHub repository. The download is
+// rejected unless piaCACertFingerprintSHA256 is non-empty AND the SHA-256
+// fingerprint of the fetched cert's DER encoding matches it exactly. This
+// prevents a MITM attacker from substituting a rogue CA cert.
 func (p *PIAClient) downloadPIACertificate() error {
 	// caCert already loaded
 	if len(p.caCert) > 0 {
 		return nil
 	}
 
-	// Download certificate
-	resp, err := http.Get("https://raw.githubusercontent.com/pia-foss/desktop/master/daemon/res/ca/rsa_4096.crt")
-	if err != nil {
-		return err
+	// Prefer a locally-provided cert file over the network download.
+	if p.caCertPath != "" {
+		data, err := os.ReadFile(p.caCertPath)
+		if err != nil {
+			return fmt.Errorf("reading CA cert from %s: %w", p.caCertPath, err)
+		}
+		p.caCert = data
+		return nil
 	}
 
-	// Parse certificate
-	p.caCert, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	// Auto-download requires a pinned fingerprint to prevent TOFU attacks.
+	if piaCACertFingerprintSHA256 == "" {
+		return errors.New(
+			"CA cert fingerprint not configured: either supply --ca-cert <path> with a " +
+				"locally-trusted cert, or set piaCACertFingerprintSHA256 in pia/pia.go " +
+				"after verifying the value with the instructions in that file",
+		)
 	}
 
+	// Download certificate with a timeout.
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Get("https://raw.githubusercontent.com/pia-foss/desktop/master/daemon/res/ca/rsa_4096.crt")
+	if err != nil {
+		return fmt.Errorf("downloading PIA CA cert: %w", err)
+	}
+	defer resp.Body.Close()
+
+	rawPEM, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024)) // 64 KiB is ample for any cert
+	if err != nil {
+		return fmt.Errorf("reading PIA CA cert body: %w", err)
+	}
+
+	// Parse to DER so we can fingerprint the canonical encoding, not the PEM bytes.
+	pemBlock, _ := pem.Decode(rawPEM)
+	if pemBlock == nil {
+		return errors.New("PIA CA cert download: no PEM block found")
+	}
+	cert, err := x509.ParseCertificate(pemBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("PIA CA cert download: parsing certificate: %w", err)
+	}
+
+	// Verify fingerprint against the pinned constant.
+	fingerprint := sha256.Sum256(cert.Raw)
+	got := hex.EncodeToString(fingerprint[:])
+	if got != piaCACertFingerprintSHA256 {
+		return fmt.Errorf(
+			"PIA CA cert fingerprint mismatch: pinned=%s got=%s — aborting to prevent MITM",
+			piaCACertFingerprintSHA256, got,
+		)
+	}
+
+	p.caCert = rawPEM
 	return nil
 }
