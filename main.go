@@ -106,7 +106,11 @@ func defaultAction(c *cli.Context) error {
 
 	// create pia client
 	if verbose {
-		log.Printf("Creating PIA client for region: %s", region)
+		if c.IsSet("region") {
+			log.Printf("Region: %s (user-specified)", region)
+		} else {
+			log.Printf("Region: %s (default; use --region to override)", region)
+		}
 	}
 	piaClient, err := pia.NewPIAClient(username, password, region, caCertPath, verbose)
 	if err != nil {

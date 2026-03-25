@@ -360,6 +360,9 @@ func (p *PIAClient) executePIARequest(server Server, url string) (*http.Response
 func (p *PIAClient) downloadPIACertificate() error {
 	// caCert already loaded
 	if len(p.caCert) > 0 {
+		if p.verbose {
+			log.Print("CA cert already loaded, skipping download")
+		}
 		return nil
 	}
 
@@ -370,6 +373,9 @@ func (p *PIAClient) downloadPIACertificate() error {
 			return fmt.Errorf("reading CA cert from %s: %w", p.caCertPath, err)
 		}
 		p.caCert = data
+		if p.verbose {
+			log.Printf("Loaded CA cert from file: %d bytes", len(data))
+		}
 		return nil
 	}
 
@@ -394,6 +400,9 @@ func (p *PIAClient) downloadPIACertificate() error {
 	if err != nil {
 		return fmt.Errorf("reading PIA CA cert body: %w", err)
 	}
+	if p.verbose {
+		log.Printf("Downloaded CA cert: %d bytes", len(rawPEM))
+	}
 
 	// Parse to DER so we can fingerprint the canonical encoding, not the PEM bytes.
 	pemBlock, _ := pem.Decode(rawPEM)
@@ -408,11 +417,19 @@ func (p *PIAClient) downloadPIACertificate() error {
 	// Verify fingerprint against the pinned constant.
 	fingerprint := sha256.Sum256(cert.Raw)
 	got := hex.EncodeToString(fingerprint[:])
+	if p.verbose {
+		log.Printf("CA cert fingerprint (SHA-256): %s", got)
+		log.Printf("CA cert subject: %s", cert.Subject)
+		log.Printf("CA cert expires: %s", cert.NotAfter.Format("2006-01-02"))
+	}
 	if got != piaCACertFingerprintSHA256 {
 		return fmt.Errorf(
 			"PIA CA cert fingerprint mismatch: pinned=%s got=%s — aborting to prevent MITM",
 			piaCACertFingerprintSHA256, got,
 		)
+	}
+	if p.verbose {
+		log.Print("CA cert fingerprint verified OK")
 	}
 
 	p.caCert = rawPEM

@@ -71,6 +71,13 @@ func (p *PIAWgGenerator) Generate() (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "error adding Wireguard publickey to PIA account")
 	}
+	if p.verbose {
+		log.Printf("Server IP:   %s", key.ServerIP)
+		log.Printf("Server VIP:  %s", key.ServerVip)
+		log.Printf("Peer IP:     %s", key.PeerIP)
+		log.Printf("DNS servers: %v", key.DNSServers)
+		log.Printf("Server port: %d", key.ServerPort)
+	}
 
 	// Generate Wireguard config
 	if p.verbose {
