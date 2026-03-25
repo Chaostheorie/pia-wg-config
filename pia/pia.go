@@ -39,6 +39,10 @@ import (
 // This 1fd2... value was correct as of 25 March 2026
 const piaCACertFingerprintSHA256 = "1fd25658456eab3041fba77ccd398ab8124edcc1b8b2fc1d55fdf6b1bbfc9d70"
 
+// productionTokenURL is the PIA central API endpoint used to obtain authentication tokens.
+// It works with all PIA server generations, including the new Server-XXXXX-0a format.
+const productionTokenURL = "https://www.privateinternetaccess.com/api/client/v2/token"
+
 type PIAWgClient interface {
 	GetToken() (string, error)
 	AddKey(token, publickey string) (AddKeyResult, error)
@@ -50,7 +54,6 @@ type ServerList map[Region][]Server
 type PIAClient struct {
 	region           string
 	wireguardServers ServerList
-	metadataServers  ServerList
 	username         string
 	password         string
 	verbose          bool
@@ -58,6 +61,9 @@ type PIAClient struct {
 	// caCertPath is the path to a local CA cert file. When non-empty it is used
 	// in preference to the auto-download path, bypassing any network fetch.
 	caCertPath string
+	// tokenURL overrides productionTokenURL. Empty means use productionTokenURL.
+	// This field exists solely to allow unit tests to point GetToken() at a local httptest server.
+	tokenURL string
 }
 
 type piaServerList struct {
@@ -70,8 +76,7 @@ type piaServerList struct {
 		PortForward bool   `json:"port_forward"`
 		Geo         bool   `json:"geo"`
 		Servers     struct {
-			Meta []Server `json:"meta"`
-			Wg   []Server `json:"wg"`
+			Wg []Server `json:"wg"`
 		} `json:"servers"`
 	} `json:"regions"`
 }
@@ -111,7 +116,6 @@ func NewPIAClient(username, password, region, caCertPath string, verbose bool) (
 	}
 
 	// Set servers
-	piaClient.metadataServers = piaClient.generateMetadataServerList(serverList)
 	piaClient.wireguardServers = piaClient.generateWireguardServerList(serverList)
 
 	// Validate region exists
@@ -123,28 +127,56 @@ func NewPIAClient(username, password, region, caCertPath string, verbose bool) (
 		return nil, fmt.Errorf("region '%s' not found. Available regions: %v. Use 'pia-wg-config regions' to see all available regions", region, availableRegions[:5]) // Show first 5 as example
 	}
 
+	// Pre-load the CA certificate so we fail fast if the supplied path is invalid.
+	// This is also a no-op cache warm-up on the auto-download path.
+	if err := piaClient.downloadPIACertificate(); err != nil {
+		return nil, errors.Wrap(err, "loading PIA CA certificate")
+	}
+
 	return &piaClient, nil
 }
 
-// GetToken
+// GetToken fetches an authentication token from PIA's central API.
+// The central endpoint works with all server generations, including the new
+// Server-XXXXX-0a format whose regional meta servers do not respond to
+// the old /authv3/generateToken endpoint.
 func (p *PIAClient) GetToken() (string, error) {
-	server := p.getMetadataServerForRegion()
-	url := fmt.Sprintf("https://%v/authv3/generateToken", server.Cn)
-
-	// Send request
-	resp, err := p.executePIARequest(server, url, "")
-	if err != nil {
-		return "", errors.Wrap(err, "error executing request")
+	endpoint := productionTokenURL
+	if p.tokenURL != "" {
+		endpoint = p.tokenURL
 	}
 
-	// Parse response
+	if p.verbose {
+		log.Print("Requesting token from PIA central API")
+	}
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.PostForm(endpoint, url.Values{
+		"username": {p.username},
+		"password": {p.password},
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "requesting token from PIA API")
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", errors.Wrap(err, "reading token response body")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
 	var tokenResp struct {
 		Token string `json:"token"`
 	}
-
-	err = json.NewDecoder(resp.Body).Decode(&tokenResp)
-	if err != nil {
-		return "", errors.Wrap(err, "error decoding token response")
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", errors.Wrap(err, "decoding token response")
+	}
+	if tokenResp.Token == "" {
+		return "", errors.New("received empty token from PIA API")
 	}
 
 	if p.verbose {
@@ -178,7 +210,7 @@ func (p *PIAClient) AddKey(token, publickey string) (AddKeyResult, error) {
 	url := fmt.Sprintf("https://%v:1337/addKey?pt=%v&pubkey=%v", server.Cn, url.QueryEscape(token), url.QueryEscape(publickey))
 
 	// Send request
-	resp, err := p.executePIARequest(server, url, token)
+	resp, err := p.executePIARequest(server, url)
 	if err != nil {
 		return addKeyResp, errors.Wrap(err, "error executing request")
 	}
@@ -199,17 +231,6 @@ func (p *PIAClient) getWireguardServerForRegion() Server {
 	servers := p.wireguardServers[Region(p.region)]
 	if len(servers) == 0 {
 		log.Fatalf("No Wireguard servers available for region: %s", p.region)
-	}
-	return servers[0]
-}
-
-func (p *PIAClient) getMetadataServerForRegion() Server {
-	if p.verbose {
-		log.Print("Getting metadata server for region: ", p.region)
-	}
-	servers := p.metadataServers[Region(p.region)]
-	if len(servers) == 0 {
-		log.Fatalf("No metadata servers available for region: %s", p.region)
 	}
 	return servers[0]
 }
@@ -258,23 +279,7 @@ func (p *PIAClient) generateWireguardServerList(list piaServerList) ServerList {
 	return servers
 }
 
-// generateMetadataServerList
-func (p *PIAClient) generateMetadataServerList(list piaServerList) ServerList {
-	servers := ServerList{}
-
-	for _, r := range list.Regions {
-		for _, server := range r.Servers.Meta {
-			servers[Region(r.ID)] = append(servers[Region(r.ID)], Server{
-				Cn: server.Cn,
-				IP: server.IP,
-			})
-		}
-	}
-
-	return servers
-}
-
-func (p *PIAClient) executePIARequest(server Server, url, token string) (*http.Response, error) {
+func (p *PIAClient) executePIARequest(server Server, url string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -282,11 +287,6 @@ func (p *PIAClient) executePIARequest(server Server, url, token string) (*http.R
 
 	// Set header to JSON
 	req.Header.Set("Content-Type", "application/json")
-
-	// Set basic auth
-	if token == "" {
-		req.SetBasicAuth(p.username, p.password)
-	}
 
 	// Add certificate to shared pool
 	err = p.downloadPIACertificate()
