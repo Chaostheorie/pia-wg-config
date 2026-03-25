@@ -76,10 +76,20 @@ func TestCLI_Help_ExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0 for --help, got %d", code)
 	}
-	for _, flag := range []string{"--outfile", "--region", "--verbose", "--ca-cert"} {
+	for _, flag := range []string{"--outfile", "--region", "--verbose", "--ca-cert", "--version"} {
 		if !strings.Contains(out, flag) {
 			t.Errorf("expected flag %q in help output", flag)
 		}
+	}
+}
+
+func TestCLI_Version_ExitsZeroAndPrintsVersion(t *testing.T) {
+	code, out, _ := run(t, nil, "--version")
+	if code != 0 {
+		t.Errorf("expected exit 0 for --version, got %d", code)
+	}
+	if !strings.Contains(out, "pia-wg-config") {
+		t.Errorf("expected binary name in version output, got: %s", out)
 	}
 }
 

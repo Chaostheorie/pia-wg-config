@@ -12,10 +12,18 @@ import (
 	cli "github.com/urfave/cli/v2"
 )
 
+// version is stamped at build time via: -ldflags "-X main.version=$(git describe --tags)"
+var version = "dev"
+
 func main() {
+	// urfave/cli registers -v as a short alias for --version by default, which
+	// conflicts with our -v/--verbose flag. Override to long-form only.
+	cli.VersionFlag = &cli.BoolFlag{Name: "version", Usage: "print the version"}
+
 	app := &cli.App{
-		Name:  "pia-wg-config",
-		Usage: "generate a wireguard config for private internet access",
+		Name:    "pia-wg-config",
+		Version: version,
+		Usage:   "generate a wireguard config for private internet access",
 		Description: "Credentials can be supplied as positional arguments (USERNAME PASSWORD) or via\n" +
 			"the PIAWGCONFIG_USER and PIAWGCONFIG_PW environment variables (recommended).\n" +
 			"Environment variables take priority over positional arguments.",
@@ -51,7 +59,7 @@ func main() {
 			&cli.StringFlag{
 				Name:    "ca-cert",
 				Aliases: []string{"c"},
-				Usage:   "Path to a local PIA ca cert pem `FILE`. If omitted, the cert is downloaded and verified against a pinned SHA-256 fingerprint.",
+				Usage:   "Path to a locally-trusted PIA ca cert pem `FILE`. If omitted, the cert is fetched from GitHub and verified against a pinned SHA-256 fingerprint.",
 			},
 		},
 	}
