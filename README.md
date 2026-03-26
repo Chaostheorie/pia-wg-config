@@ -70,8 +70,8 @@ pia-wg-config USERNAME PASSWORD
 # Generate config for a specific region
 pia-wg-config -r uk_london USERNAME PASSWORD
 
-# Save config to file
-pia-wg-config -o wg0.conf -r de_frankfurt USERNAME PASSWORD
+# Save config to file with common server name
+pia-wg-config -s -o wg0.conf -r de_frankfurt USERNAME PASSWORD
 
 # Enable verbose output
 pia-wg-config -v -r japan USERNAME PASSWORD
@@ -94,6 +94,7 @@ pia-wg-config [OPTIONS] USERNAME PASSWORD
 - `-o, --outfile` - Output file for the config (default: stdout)
 - `-v, --verbose` - Enable verbose output
 - `-h, --help` - Show help
+- `-s, --server` - Add Server common name to the config
 
 ### Subcommands
 
