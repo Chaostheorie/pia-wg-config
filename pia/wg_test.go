@@ -6,6 +6,14 @@ import (
 
 type PIAClientMock struct{}
 
+func (p *PIAClientMock) getMetadataServerForRegion() Server {
+	// Mock implementation for getMetadataServerForRegion
+	return Server{
+		Cn: "mock-server",
+		IP: "0.0.0.0",
+	}
+}
+
 func (p *PIAClientMock) GetToken() (string, error) {
 	return "", nil
 }
@@ -39,6 +47,7 @@ func TestPIAWgGenerator_Generate(t *testing.T) {
 				pia: &PIAClientMock{},
 				config: PIAWgGeneratorConfig{
 					Verbose:    false,
+					ServerName: true,
 					PrivateKey: "test_privatekey",
 					PublicKey:  "test_publickey",
 				},
@@ -51,7 +60,8 @@ DNS = 1.1.1.1
 PublicKey = test_publickey
 AllowedIPs = 0.0.0.0/0
 Endpoint = 1.2.3.4:1337
-PersistentKeepalive = 25`,
+PersistentKeepalive = 25
+ServerCommonName = mock-server`,
 			wantErr: false,
 		},
 	}

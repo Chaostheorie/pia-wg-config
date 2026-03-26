@@ -43,6 +43,12 @@ func main() {
 				Value:   false,
 				Usage:   "Print verbose output",
 			},
+			&cli.BoolFlag{
+				Name:    "server",
+				Aliases: []string{"s"},
+				Value:   false,
+				Usage:   "Add Server common name to the config",
+			},
 		},
 	}
 
@@ -74,6 +80,7 @@ func defaultAction(c *cli.Context) error {
 	password := c.Args().Get(1)
 	verbose := c.Bool("verbose")
 	region := c.String("region")
+	serverName := c.Bool("server")
 
 	if username == "" || password == "" {
 		return cli.Exit("Error: Username and password cannot be empty", 1)
@@ -102,7 +109,9 @@ func defaultAction(c *cli.Context) error {
 	if verbose {
 		log.Print("creating wg config generator")
 	}
-	wgConfigGenerator := pia.NewPIAWgGenerator(piaClient, pia.PIAWgGeneratorConfig{Verbose: verbose})
+	wgConfigGenerator := pia.NewPIAWgGenerator(
+		piaClient, pia.PIAWgGeneratorConfig{Verbose: verbose, ServerName: serverName},
+	)
 
 	// generate wg config
 	if verbose {

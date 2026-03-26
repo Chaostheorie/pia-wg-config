@@ -22,6 +22,7 @@ import (
 type PIAWgClient interface {
 	GetToken() (string, error)
 	AddKey(token, publickey string) (AddKeyResult, error)
+	getMetadataServerForRegion() Server
 }
 
 type Region string
@@ -192,7 +193,7 @@ func (p *PIAClient) getMetadataServerForRegion() Server {
 func (p *PIAClient) getServerList() (piaServerList, error) {
 	var serverList piaServerList
 
-	resp, err := http.Get("https://serverlist.piaservers.net/vpninfo/servers/v4")
+	resp, err := http.Get("https://serverlist.piaservers.net/vpninfo/servers/v6")
 	if err != nil {
 		return piaServerList{}, err
 	}
