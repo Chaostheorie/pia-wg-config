@@ -52,12 +52,19 @@ type PIAWgClient interface {
 type Region string
 type ServerList map[Region][]Server
 
+type RegionInformation struct {
+	Name           string
+	PortForwarding bool
+}
+
 type PIAClient struct {
 	region           string
 	wireguardServers ServerList
+	metadataServers  ServerList
 	username         string
 	password         string
 	verbose          bool
+	portForwarding   bool
 	caCert           []byte
 	// caCertPath is the path to a local CA cert file. When non-empty it is used
 	// in preference to the auto-download path, bypassing any network fetch.
@@ -77,7 +84,8 @@ type piaServerList struct {
 		PortForward bool   `json:"port_forward"`
 		Geo         bool   `json:"geo"`
 		Servers     struct {
-			Wg []Server `json:"wg"`
+			Wg   []Server `json:"wg"`
+			Meta []Server `json:"meta"`
 		} `json:"servers"`
 	} `json:"regions"`
 }
@@ -101,13 +109,17 @@ type Server struct {
 // NewPIAClient creates a new PIA client for with the list of servers populated.
 // caCertPath may be empty, in which case the CA cert is downloaded from PIA's GitHub
 // repository and verified against the piaCACertFingerprintSHA256 constant.
-func NewPIAClient(username, password, region, caCertPath string, verbose bool) (*PIAClient, error) {
+func NewPIAClient(
+	username, password, region, caCertPath string,
+	verbose, portForwarding bool,
+) (*PIAClient, error) {
 	piaClient := PIAClient{
-		username:   username,
-		password:   password,
-		region:     region,
-		verbose:    verbose,
-		caCertPath: caCertPath,
+		username:       username,
+		password:       password,
+		region:         region,
+		verbose:        verbose,
+		portForwarding: portForwarding,
+		caCertPath:     caCertPath,
 	}
 
 	// Get list of servers
@@ -117,7 +129,15 @@ func NewPIAClient(username, password, region, caCertPath string, verbose bool) (
 	}
 
 	// Set servers
-	piaClient.wireguardServers = piaClient.generateWireguardServerList(serverList)
+	piaClient.metadataServers, err = piaClient.generateMetadataServerList(serverList)
+	if err != nil {
+		return nil, err
+	}
+
+	piaClient.wireguardServers, err = piaClient.generateWireguardServerList(serverList)
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate region exists
 	if _, exists := piaClient.wireguardServers[Region(region)]; !exists {
@@ -188,15 +208,15 @@ func (p *PIAClient) GetToken() (string, error) {
 }
 
 // GetAvailableRegions returns all available regions
-func (p *PIAClient) GetAvailableRegions() (map[Region]string, error) {
+func (p *PIAClient) GetAvailableRegions() (map[Region]*RegionInformation, error) {
 	serverList, err := p.getServerList()
 	if err != nil {
 		return nil, err
 	}
 
-	regions := make(map[Region]string)
+	regions := make(map[Region]*RegionInformation)
 	for _, r := range serverList.Regions {
-		regions[Region(r.ID)] = r.Name
+		regions[Region(r.ID)] = &RegionInformation{Name: r.Name, PortForwarding: r.PortForward}
 	}
 
 	return regions, nil
@@ -211,7 +231,7 @@ func (p *PIAClient) AddKey(token, publickey string) (AddKeyResult, error) {
 	url := fmt.Sprintf("https://%v:1337/addKey?pt=%v&pubkey=%v", server.Cn, url.QueryEscape(token), url.QueryEscape(publickey))
 
 	// Send request
-	resp, err := p.executePIARequest(server, url)
+	resp, err := p.executePIARequest(server, url, token)
 	if err != nil {
 		return addKeyResp, errors.Wrap(err, "error executing request")
 	}
@@ -232,6 +252,17 @@ func (p *PIAClient) getWireguardServerForRegion() Server {
 	servers := p.wireguardServers[Region(p.region)]
 	if len(servers) == 0 {
 		log.Fatalf("No Wireguard servers available for region: %s", p.region)
+	}
+	return servers[0]
+}
+
+func (p *PIAClient) getMetadataServerForRegion() Server {
+	if p.verbose {
+		log.Print("Getting metadata server for region: ", p.region)
+	}
+	servers := p.metadataServers[Region(p.region)]
+	if len(servers) == 0 {
+		log.Fatalf("No metadata servers available for region: %s", p.region)
 	}
 	return servers[0]
 }
@@ -265,11 +296,15 @@ func (p *PIAClient) getServerList() (piaServerList, error) {
 }
 
 // generateWireguardServerList
-func (p *PIAClient) generateWireguardServerList(list piaServerList) ServerList {
+func (p *PIAClient) generateWireguardServerList(list piaServerList) (ServerList, error) {
 	servers := ServerList{}
 
 	for _, r := range list.Regions {
 		for _, server := range r.Servers.Wg {
+			if p.portForwarding && !r.PortForward {
+				continue
+			}
+
 			servers[Region(r.ID)] = append(servers[Region(r.ID)], Server{
 				Cn: server.Cn,
 				IP: server.IP,
@@ -277,10 +312,46 @@ func (p *PIAClient) generateWireguardServerList(list piaServerList) ServerList {
 		}
 	}
 
-	return servers
+	if len(servers) == 0 {
+		if p.portForwarding {
+			return nil, errors.New("No servers found for region: " + p.region + " with port forwarding enabled")
+		}
+
+		return nil, errors.New("No servers found for region: " + p.region)
+	}
+
+	return servers, nil
 }
 
-func (p *PIAClient) executePIARequest(server Server, url string) (*http.Response, error) {
+// generateMetadataServerList
+func (p *PIAClient) generateMetadataServerList(list piaServerList) (ServerList, error) {
+	servers := ServerList{}
+
+	for _, r := range list.Regions {
+		for _, server := range r.Servers.Meta {
+			if p.portForwarding && !r.PortForward {
+				continue
+			}
+
+			servers[Region(r.ID)] = append(servers[Region(r.ID)], Server{
+				Cn: server.Cn,
+				IP: server.IP,
+			})
+		}
+	}
+
+	if len(servers) == 0 {
+		if p.portForwarding {
+			return nil, errors.New("No servers found for region: " + p.region + " with port forwarding enabled")
+		}
+
+		return nil, errors.New("No servers found for region: " + p.region)
+	}
+
+	return servers, nil
+}
+
+func (p *PIAClient) executePIARequest(server Server, url, token string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err

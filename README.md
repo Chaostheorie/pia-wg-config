@@ -100,12 +100,13 @@ pia-wg-config [OPTIONS] USERNAME PASSWORD
 - `PASSWORD` - Your PIA password
 
 **Options:**
-- `-r, --region` - Region to connect to (default: "us_california")
+- `-r, --region` - Region to connect to (default: "ca_toronto")
 - `-o, --outfile` - Output file for the config (default: stdout)
 - `-c, --ca-cert` - Path to a locally-trusted PEM CA certificate file for verifying PIA's WireGuard API endpoint. When omitted, the cert is fetched from GitHub at runtime and verified against a pinned SHA-256 fingerprint — supply this flag to eliminate that runtime-download trust dependency in security-sensitive environments.
 - `-v, --verbose` - Enable verbose output
 - `-h, --help` - Show help
 - `-s, --server` - Add Server common name to the config
+- `-p, --port-forwarding` - Only select servers with port forwarding (will return an error if no server in the region is eligible)
 
 **Environment variables (alternative to positional arguments):**
 - `PIAWGCONFIG_USER` - PIA username (overridden by positional `USERNAME` argument if both are supplied)
