@@ -70,8 +70,8 @@ pia-wg-config USERNAME PASSWORD
 # Generate config for a specific region
 pia-wg-config -r uk_london USERNAME PASSWORD
 
-# Save config to file
-pia-wg-config -o wg0.conf -r de_frankfurt USERNAME PASSWORD
+# Save config to file with common server name
+pia-wg-config -s -o wg0.conf -r de_frankfurt USERNAME PASSWORD
 
 # Enable verbose output
 pia-wg-config -v -r japan USERNAME PASSWORD
@@ -105,6 +105,7 @@ pia-wg-config [OPTIONS] USERNAME PASSWORD
 - `-c, --ca-cert` - Path to a locally-trusted PEM CA certificate file for verifying PIA's WireGuard API endpoint. When omitted, the cert is fetched from GitHub at runtime and verified against a pinned SHA-256 fingerprint — supply this flag to eliminate that runtime-download trust dependency in security-sensitive environments.
 - `-v, --verbose` - Enable verbose output
 - `-h, --help` - Show help
+- `-s, --server` - Add Server common name to the config
 
 **Environment variables (alternative to positional arguments):**
 - `PIAWGCONFIG_USER` - PIA username (overridden by positional `USERNAME` argument if both are supplied)
