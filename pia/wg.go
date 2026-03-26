@@ -14,12 +14,14 @@ import (
 type PIAWgGenerator struct {
 	pia        PIAWgClient
 	verbose    bool
+	serverName bool
 	privatekey string
 	publickey  string
 }
 
 type PIAWgGeneratorConfig struct {
 	Verbose    bool
+	ServerName bool
 	PrivateKey string
 	PublicKey  string
 }
@@ -32,12 +34,14 @@ type templateConfig struct {
 	PrivateKey          string
 	PublicKey           string
 	PersistentKeepalive string
+	ServerCommonName    string
 }
 
 func NewPIAWgGenerator(pia PIAWgClient, config PIAWgGeneratorConfig) *PIAWgGenerator {
 	return &PIAWgGenerator{
 		pia:        pia,
 		verbose:    config.Verbose,
+		serverName: config.ServerName,
 		privatekey: config.PrivateKey,
 		publickey:  config.PublicKey,
 	}
@@ -121,6 +125,12 @@ func (p *PIAWgGenerator) generateConfig(key AddKeyResult, privatekey string) (st
 		return "", errors.Wrap(err, "error parsing wireguard config template")
 	}
 
+	var serverCommonName string
+	if p.serverName {
+		server := p.pia.getMetadataServerForRegion()
+		serverCommonName = server.Cn
+	}
+
 	// execute template
 	tc := templateConfig{
 		PrivateKey:          privatekey,
@@ -130,6 +140,7 @@ func (p *PIAWgGenerator) generateConfig(key AddKeyResult, privatekey string) (st
 		Address:             key.PeerIP,
 		AllowedIPs:          "0.0.0.0/0",
 		PersistentKeepalive: "25",
+		ServerCommonName:    serverCommonName,
 	}
 
 	var config bytes.Buffer
@@ -149,4 +160,7 @@ DNS = {{.DNS}}
 PublicKey = {{.PublicKey}}
 AllowedIPs = {{.AllowedIPs}}
 Endpoint = {{.Endpoint}}:1337
-PersistentKeepalive = {{.PersistentKeepalive}}`
+PersistentKeepalive = {{.PersistentKeepalive}}
+{{- if .ServerCommonName }}
+ServerCommonName = {{.ServerCommonName}}
+{{- end }}`

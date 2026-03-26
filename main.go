@@ -61,6 +61,12 @@ func main() {
 				Aliases: []string{"c"},
 				Usage:   "Path to a locally-trusted PIA ca cert pem `FILE`. If omitted, the cert is fetched from GitHub and verified against a pinned SHA-256 fingerprint.",
 			},
+			&cli.BoolFlag{
+				Name:    "server",
+				Aliases: []string{"s"},
+				Value:   false,
+				Usage:   "Add Server common name to the config",
+			},
 		},
 	}
 
@@ -111,6 +117,11 @@ func defaultAction(c *cli.Context) error {
 	verbose := c.Bool("verbose")
 	region := c.String("region")
 	caCertPath := c.String("ca-cert")
+	serverName := c.Bool("server")
+
+	if username == "" || password == "" {
+		return cli.Exit("Error: Username and password cannot be empty", 1)
+	}
 
 	// create pia client
 	if verbose {
@@ -139,7 +150,9 @@ func defaultAction(c *cli.Context) error {
 	if verbose {
 		log.Print("creating wg config generator")
 	}
-	wgConfigGenerator := pia.NewPIAWgGenerator(piaClient, pia.PIAWgGeneratorConfig{Verbose: verbose})
+	wgConfigGenerator := pia.NewPIAWgGenerator(
+		piaClient, pia.PIAWgGeneratorConfig{Verbose: verbose, ServerName: serverName},
+	)
 
 	// generate wg config
 	if verbose {
