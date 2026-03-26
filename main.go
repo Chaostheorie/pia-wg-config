@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
+	"slices"
+	"text/tabwriter"
 
 	"github.com/kylegrantlucas/pia-wg-config/pia"
 	cli "github.com/urfave/cli/v2"
@@ -34,7 +35,7 @@ func main() {
 			&cli.StringFlag{
 				Name:    "region",
 				Aliases: []string{"r"},
-				Value:   "us_california",
+				Value:   "ca_toronto",
 				Usage:   "The private internet access region to connect to (use 'regions' command to list all available regions)",
 			},
 			&cli.BoolFlag{
@@ -48,6 +49,12 @@ func main() {
 				Aliases: []string{"s"},
 				Value:   false,
 				Usage:   "Add Server common name to the config",
+			},
+			&cli.BoolFlag{
+				Name:    "port-forwarding",
+				Aliases: []string{"p"},
+				Value:   false,
+				Usage:   "Only get servers with port forwarding enabled",
 			},
 		},
 	}
@@ -81,6 +88,7 @@ func defaultAction(c *cli.Context) error {
 	verbose := c.Bool("verbose")
 	region := c.String("region")
 	serverName := c.Bool("server")
+	portForwarding := c.Bool("port-forwarding")
 
 	if username == "" || password == "" {
 		return cli.Exit("Error: Username and password cannot be empty", 1)
@@ -90,7 +98,7 @@ func defaultAction(c *cli.Context) error {
 	if verbose {
 		log.Printf("Creating PIA client for region: %s", region)
 	}
-	piaClient, err := pia.NewPIAClient(username, password, region, verbose)
+	piaClient, err := pia.NewPIAClient(username, password, region, verbose, portForwarding)
 	if err != nil {
 		if verbose {
 			log.Printf("Failed to create PIA client: %v", err)
@@ -155,7 +163,7 @@ func listRegions(c *cli.Context) error {
 	fmt.Println("Fetching available regions from PIA...")
 
 	// Create a dummy client just to get the server list
-	piaClient, err := pia.NewPIAClient("", "", "us_california", false)
+	piaClient, err := pia.NewPIAClient("", "", "us_california", false, c.Bool("port-forwarding"))
 	if err != nil {
 		return fmt.Errorf("failed to fetch regions: %v", err)
 	}
@@ -166,17 +174,26 @@ func listRegions(c *cli.Context) error {
 	}
 
 	// Sort regions for consistent output
-	var regionList []string
+	var regionList []pia.Region
+	var longestRegion int
 	for region := range regions {
-		regionList = append(regionList, string(region))
+		regionList = append(regionList, region)
+		longestRegion = max(longestRegion, len(region))
 	}
-	sort.Strings(regionList)
+	slices.Sort(regionList)
 
 	fmt.Println("\nAvailable PIA regions:")
 	fmt.Println("======================")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.TabIndent)
+	fmt.Fprintln(w, "Region\tName\tPort forwarding")
+
 	for _, region := range regionList {
-		fmt.Printf("  %s\n", region)
+		info := regions[region]
+		fmt.Fprintf(w, "%s\t%s\t%t\n", region, info.Name, info.PortForwarding)
 	}
+
+	w.Flush()
+
 	fmt.Printf("\nTotal: %d regions available\n", len(regionList))
 	fmt.Println("\nUsage example:")
 	fmt.Println("  pia-wg-config -r uk_london USERNAME PASSWORD")

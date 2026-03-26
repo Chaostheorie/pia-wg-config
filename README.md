@@ -90,11 +90,12 @@ pia-wg-config [OPTIONS] USERNAME PASSWORD
 - `PASSWORD` - Your PIA password
 
 **Options:**
-- `-r, --region` - Region to connect to (default: "us_california")
+- `-r, --region` - Region to connect to (default: "ca_toronto")
 - `-o, --outfile` - Output file for the config (default: stdout)
 - `-v, --verbose` - Enable verbose output
 - `-h, --help` - Show help
 - `-s, --server` - Add Server common name to the config
+- `-p, --port-forwarding` - Only select servers with port forwarding (will return an error if no server in the region is eligible)
 
 ### Subcommands
 

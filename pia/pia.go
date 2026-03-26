@@ -28,6 +28,11 @@ type PIAWgClient interface {
 type Region string
 type ServerList map[Region][]Server
 
+type RegionInformation struct {
+	Name           string
+	PortForwarding bool
+}
+
 type PIAClient struct {
 	region           string
 	wireguardServers ServerList
@@ -35,6 +40,7 @@ type PIAClient struct {
 	username         string
 	password         string
 	verbose          bool
+	portForwarding   bool
 	caCert           []byte
 }
 
@@ -71,12 +77,16 @@ type Server struct {
 }
 
 // NewPIAClient creates a new PIA client for with the list of servers populated
-func NewPIAClient(username, password, region string, verbose bool) (*PIAClient, error) {
+func NewPIAClient(
+	username, password, region string,
+	verbose, portForwarding bool,
+) (*PIAClient, error) {
 	piaClient := PIAClient{
-		username: username,
-		password: password,
-		region:   region,
-		verbose:  verbose,
+		username:       username,
+		password:       password,
+		region:         region,
+		verbose:        verbose,
+		portForwarding: portForwarding,
 	}
 
 	// Get list of servers
@@ -86,8 +96,15 @@ func NewPIAClient(username, password, region string, verbose bool) (*PIAClient, 
 	}
 
 	// Set servers
-	piaClient.metadataServers = piaClient.generateMetadataServerList(serverList)
-	piaClient.wireguardServers = piaClient.generateWireguardServerList(serverList)
+	piaClient.metadataServers, err = piaClient.generateMetadataServerList(serverList)
+	if err != nil {
+		return nil, err
+	}
+
+	piaClient.wireguardServers, err = piaClient.generateWireguardServerList(serverList)
+	if err != nil {
+		return nil, err
+	}
 
 	// Validate region exists
 	if _, exists := piaClient.wireguardServers[Region(region)]; !exists {
@@ -130,15 +147,15 @@ func (p *PIAClient) GetToken() (string, error) {
 }
 
 // GetAvailableRegions returns all available regions
-func (p *PIAClient) GetAvailableRegions() (map[Region]string, error) {
+func (p *PIAClient) GetAvailableRegions() (map[Region]*RegionInformation, error) {
 	serverList, err := p.getServerList()
 	if err != nil {
 		return nil, err
 	}
 
-	regions := make(map[Region]string)
+	regions := make(map[Region]*RegionInformation)
 	for _, r := range serverList.Regions {
-		regions[Region(r.ID)] = r.Name
+		regions[Region(r.ID)] = &RegionInformation{Name: r.Name, PortForwarding: r.PortForward}
 	}
 
 	return regions, nil
@@ -218,11 +235,15 @@ func (p *PIAClient) getServerList() (piaServerList, error) {
 }
 
 // generateWireguardServerList
-func (p *PIAClient) generateWireguardServerList(list piaServerList) ServerList {
+func (p *PIAClient) generateWireguardServerList(list piaServerList) (ServerList, error) {
 	servers := ServerList{}
 
 	for _, r := range list.Regions {
 		for _, server := range r.Servers.Wg {
+			if p.portForwarding && !r.PortForward {
+				continue
+			}
+
 			servers[Region(r.ID)] = append(servers[Region(r.ID)], Server{
 				Cn: server.Cn,
 				IP: server.IP,
@@ -230,15 +251,27 @@ func (p *PIAClient) generateWireguardServerList(list piaServerList) ServerList {
 		}
 	}
 
-	return servers
+	if len(servers) == 0 {
+		if p.portForwarding {
+			return nil, errors.New("No servers found for region: " + p.region + " with port forwarding enabled")
+		}
+
+		return nil, errors.New("No servers found for region: " + p.region)
+	}
+
+	return servers, nil
 }
 
 // generateMetadataServerList
-func (p *PIAClient) generateMetadataServerList(list piaServerList) ServerList {
+func (p *PIAClient) generateMetadataServerList(list piaServerList) (ServerList, error) {
 	servers := ServerList{}
 
 	for _, r := range list.Regions {
 		for _, server := range r.Servers.Meta {
+			if p.portForwarding && !r.PortForward {
+				continue
+			}
+
 			servers[Region(r.ID)] = append(servers[Region(r.ID)], Server{
 				Cn: server.Cn,
 				IP: server.IP,
@@ -246,7 +279,15 @@ func (p *PIAClient) generateMetadataServerList(list piaServerList) ServerList {
 		}
 	}
 
-	return servers
+	if len(servers) == 0 {
+		if p.portForwarding {
+			return nil, errors.New("No servers found for region: " + p.region + " with port forwarding enabled")
+		}
+
+		return nil, errors.New("No servers found for region: " + p.region)
+	}
+
+	return servers, nil
 }
 
 func (p *PIAClient) executePIARequest(server Server, url, token string) (*http.Response, error) {
